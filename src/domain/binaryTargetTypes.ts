@@ -14,8 +14,10 @@ export interface MipsElfMetadata {
   readonly byteOrder: "little" | "big";
   readonly type: number;
   readonly flags: number;
-  /** Undefined until inspected; null means neither typed table has a record. */
+  /** Undefined until inspected; null means no ABI record was observed. */
   readonly abiFlags?: MipsAbiFlags | null;
+  /** Unavailable declaration sources; missing records there remain unknown. */
+  readonly limitations?: readonly string[];
 }
 
 /** Declared fields of the 24-byte MIPS ABI flags record, not inferred semantics. */
@@ -77,6 +79,13 @@ export type BinaryTarget =
       readonly managed?: never;
     })
   | (ExecutableTarget & {
+      readonly format: "raw-binary";
+      readonly entryPoint: string;
+      readonly entryPointSource: string;
+      readonly executableRole?: never;
+      readonly managed?: never;
+    })
+  | (ExecutableTarget & {
       readonly format: "pe";
       /** Provider-neutral PE image role observed from COFF characteristics. */
       readonly executableRole:
@@ -100,6 +109,9 @@ export type BinaryTarget =
           | "apk"
           | "msix"
           | "appx"
+          | "hap"
+          | "hsp"
+          | "app-pack"
           | "asar"
           | "dmg"
           | "pkg";

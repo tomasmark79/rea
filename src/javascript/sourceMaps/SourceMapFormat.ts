@@ -279,6 +279,20 @@ const inspectLeaf = (
   return leaf;
 };
 
+/**
+ * Return the JSON view of source-map text without changing the source evidence.
+ * ECMA-426 §11.2.1 permits HTTP(S) responses to start with `)]}'`; the line
+ * through the first HTTP newline is transport framing, not map content. Local
+ * point tracing shares this parser and has historically accepted the same
+ * framing. https://tc39.es/ecma426/#sec-fetchsourcemap
+ */
+export const sourceMapJsonText = (text: string): string => {
+  const withoutBom = text.replace(/^\uFEFF/u, "");
+  if (!withoutBom.startsWith(")]}'")) return withoutBom;
+  const newline = withoutBom.search(/[\r\n]/u);
+  return newline === -1 ? "" : withoutBom.slice(newline);
+};
+
 /** Validate structure before allocation, retaining raw declarations and section boundaries. */
 export const inspectSourceMap = (
   text: string,
@@ -289,10 +303,7 @@ export const inspectSourceMap = (
   readonly declarations: readonly SourceMapSourceDeclaration[];
   readonly leaves: readonly SourceMapLeaf[];
 } => {
-  const withoutBom = text.replace(/^\uFEFF/u, "");
-  const jsonText = withoutBom.startsWith(")]}'")
-    ? withoutBom.slice(withoutBom.indexOf("\n") + 1)
-    : withoutBom;
+  const jsonText = sourceMapJsonText(text);
   const value: unknown = JSON.parse(jsonText);
   const inspected = inspectSourceMapValue(value);
   const normalized =
@@ -344,7 +355,10 @@ export const inspectSourceMapValue = (
     }
     const leaf = inspectLeaf(node, budget, options);
     leaves.push({ map: leaf, offset: node.offset, stop: node.stop });
-    if (options.profile !== "browser-collection")
+    if (options.profile !== "browser-collection") {
+      const ignoredSources = new Set(
+        leaf.ignoreList ?? leaf.x_google_ignoreList ?? [],
+      );
       for (const [sourceIndex, source] of leaf.sources.entries())
         declarations.push({
           sectionPath: node.path,
@@ -352,10 +366,9 @@ export const inspectSourceMapValue = (
           source,
           root: leaf.sourceRoot ?? null,
           content: leaf.sourcesContent?.[sourceIndex] ?? null,
-          ignored: (leaf.ignoreList ?? leaf.x_google_ignoreList ?? []).includes(
-            sourceIndex,
-          ),
+          ignored: ignoredSources.has(sourceIndex),
         });
+    }
   }
   return {
     format: root.sections === undefined ? "regular" : "indexed",

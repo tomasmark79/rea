@@ -150,13 +150,15 @@ structured data and matching text projection. Oversized errors are retained
 as Evidence before delivery of a bounded diagnostic with an export reference;
 if retention is unavailable or fails, the diagnostic reports that reason.
 
-REA accepts ordinary `tools/call` progress tokens. Updates are monotonic,
-rate-bounded to at most one intermediate update per 100 ms, and always allow a
-terminal update. Unknown totals are omitted; REA does not fabricate percentages.
+REA accepts ordinary `tools/call` progress tokens. The numeric `progress` counts
+emitted status observations and strictly increases, including when a waiting
+phase has completed no additional work. Updates are rate-bounded to at most one
+intermediate update per 100 ms and always allow a terminal update. `total` is
+omitted because the number of future status observations is unknown. Read
+`message` for the phase and observed work; REA does not fabricate percentages.
 `capture_process_scenario` uses that boundary only when the client supplies a
-progress token. Notifications set `progress` to the count of collected terminal
-frames, process samples, and interaction events, omit `total`, and put the
-lifecycle phase, elapsed time, and final cleanup status in `message`. A client
+progress token. Notifications put the lifecycle phase, elapsed time, and final
+cleanup status in `message`. A client
 that does not send a progress token receives no progress notifications. The
 tool result is unchanged either way.
 Provider calls receive the request cancellation signal. Artifact traversal,
@@ -167,6 +169,9 @@ Native call tracing and process capture retain available observations in
 `details.partial_observation` on failure, including when cleanup succeeds.
 The observation reports its partial coverage; cleanup details describe host
 state separately from the execution failure.
+A process capture that fails during a finalization interval keeps every signal
+attempt and its delivery result in `details.partial_observation`, with
+`elapsed_ms` and `exit_code` null when no exit was observed.
 Derived comparisons and reconstruction verification yield before computation
 and before publication, so cancellation cannot race with successful Evidence.
 
@@ -201,6 +206,7 @@ These deadlines have different owners:
 | Deadline             | Owner and effect                                                                                                                                                                                                                    |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MCP initialize       | The client bounds transport/REA connection startup, before any target query.                                                                                                                                                        |
+| Hopper startup       | REA allows 120,000 ms by default; `REA_HOPPER_STARTUP_TIMEOUT_MS` accepts decimal integers from 1–2,147,483,647 ms. Invalid values fail configuration validation. Startup failure is reported by the first provider query.          |
 | Ghidra startup       | REA allows 330,000 ms by default; `REA_GHIDRA_STARTUP_TIMEOUT_MS` accepts decimal integers from 1–2,147,483,647 ms. Invalid supplied values fail configuration validation. Startup failure is reported by the first provider query. |
 | Individual tool call | The client bounds its wait, including cold engine startup. The pinned client SDK 2.3.1 defaults to 60,000 ms and can cancel earlier than REA's startup deadline.                                                                    |
 
@@ -225,6 +231,18 @@ request and handle `notifications/progress`. Progress reports do not establish
 engine readiness or a percentage of Ghidra auto-analysis. A longer server
 startup allowance does not extend the client's deadline; progress also does not
 extend it unless the client explicitly implements that policy.
+
+While Ghidra startup is pending, REA sends a waiting notification every ten
+seconds when the request has a progress token. Its message gives elapsed waiting
+time; import, auto-analysis and bridge readiness may all still be pending.
+Waiting notifications stop when startup settles or the caller cancels. They do
+not measure engine work completed.
+
+The pinned SDK can reset the request's inactivity timeout on progress with
+`resetTimeoutOnProgress: true`. Also set `maxTotalTimeout` to bound the complete
+request; the provider's startup deadline still applies. These options belong in
+the same second argument of `callTool`. Without that explicit client policy, the
+default 60-second request deadline still expires despite waiting notifications.
 
 The 240-second setting is a measured example, not a universal timeout: a
 controlled Linux x64/WSL2 fixture took about 64 seconds for its first overview
@@ -261,9 +279,10 @@ observed process-family member remained after final close. This was a small
 1,024-byte fixture, so the longer request setting remains an example, not a
 guarantee for larger targets. No macOS cold-start recovery was exercised.
 
-With a supplied progress token, the Windows run received an operation-start
+With a supplied progress token, that earlier Windows run received an operation-start
 notification before timeout and start/completion notifications for the
-successful retry. It received no intermediate import or auto-analysis progress.
+successful retry, before startup waiting notifications were added. It received
+no intermediate import or auto-analysis progress.
 These operation markers do not measure analysis work completed or extend the
 client's deadline. Each new provider session still imports the target into a
 fresh temporary project.
@@ -305,6 +324,23 @@ that reference for a summary, one section/module, or a stable page, or call
 bundle exports stream canonical JSON into an atomically published file. A broad
 follow-up or `get_evidence_bundle` can also exceed the response budget; exporting
 preserves the complete session without sending it through a single MCP frame.
+To discover existing records without their large payloads, call
+`get_evidence_bundle` with `detail: "summary"`. Its `result.records` contain
+Evidence IDs, artifact/provider identities, analysis-profile digests and native
+procedure metadata. Optional `filters` match exact `evidence_id`, `operation`,
+`target_sha256`, `analysis_profile_digest` or `procedure_address`. Use a discovered
+ID with `inspect_analysis_view`; neither discovery nor retained selection starts
+a provider. `retention: "complete-record"` describes stored Evidence, while
+`native_dossier.value_flow` independently reports truncation, unavailable or
+unknown metadata. Missing omission counts remain null. Summary output carries
+every matching record; actual transport admission still applies. Omitted
+`detail` preserves complete canonical bundle delivery; filters require summary.
+
+For a portable exported bundle, the CLI shares this projection:
+`rea inspect-evidence-bundle '{"path":"/tmp/evidence.json","detail":"summary","filters":{"operation":"analyze_function"}}' --format json`.
+The CLI validates and materializes that local bundle under its existing memory
+budget; summary delivery does not make arbitrary large files cheap to import.
+
 Cancelling an export stops further serialization and removes its staging file.
 The destination changes only when a complete export is atomically published.
 
@@ -414,7 +450,13 @@ Tool annotations describe effects and are hints, not authorization controls
 ([MCP ToolAnnotations](https://modelcontextprotocol.io/specification/2025-06-18/schema#toolannotations)).
 `readOnlyHint` includes session state: an analysis call that records additive
 Evidence is marked non-read-only even when it leaves the target unchanged.
-`destructiveHint` describes possible data loss, not ordinary Evidence recording.
+`destructiveHint` is true when a tool may discard data (overwriting or clearing
+analyst metadata, replacing files, dropping session state), runs or drives code
+REA does not own (`executesForeignCode`: process, LLDB, Electron, browser, and
+native UI scenarios), or changes an attached Android device (`mutatesDevice`:
+push, install, uninstall, start, and stop). Ordinary Evidence recording is not
+destructive. The effect record in `binary_session` and the generated catalog
+carries each flag separately.
 Effect metadata covers possible behavior across supported inputs: DMG inventory
 can launch `hdiutil` and create an owned temporary mount directory; extraction
 creates a fresh output directory on every call. Comparing supplied web captures

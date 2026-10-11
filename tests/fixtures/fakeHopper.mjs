@@ -1,7 +1,14 @@
 import { createServer } from "node:net";
 
-const [socketPath, token, runId, shutdownMode = "acknowledge"] =
-  process.argv.slice(2);
+const [
+  socketPath,
+  token,
+  runId,
+  shutdownMode = "acknowledge",
+  diagnosticMode = "quiet",
+  healthMode = "ready",
+] = process.argv.slice(2);
+let diagnosticOutputEmitted = false;
 const heldReplies = new Map();
 if (process.send !== undefined)
   process.on("message", (message) => {
@@ -16,6 +23,18 @@ const shutdownResult = () => ({
   document_closed: shutdownMode !== "unconfirmed",
   ...(shutdownMode === "cleanup-required" ? { cleanup_required: true } : {}),
 });
+const emitDiagnosticOutput = () => {
+  if (diagnosticMode === "quiet" || diagnosticOutputEmitted) return;
+  diagnosticOutputEmitted = true;
+  const retainedTokenPrefixBytes = Math.floor(token.length / 2);
+  const preservedMarker = "source=/tmp/local-evidence.bin?cursor=keep&";
+  const fillLength = 8 * 1024 * 1024 - retainedTokenPrefixBytes;
+  const fill = "x".repeat(fillLength - Buffer.byteLength(preservedMarker));
+  process.stderr.write(`${fill}${preservedMarker}`);
+  setImmediate(() => {
+    process.stderr.write(token);
+  });
+};
 const capabilityUnavailableResult = (id) => ({
   id,
   error: {
@@ -182,17 +201,22 @@ const server = createServer((socket) => {
       if (request.token !== token) {
         send({ id: request.id, error: { code: -32001, message: "bad token" } });
       } else if (request.method === "health") {
-        send(
-          {
-            id: request.id,
-            result: {
-              name: "REA Hopper bridge",
-              version: "1.0.0",
-              run_id: runId,
+        emitDiagnosticOutput();
+        const reply = () =>
+          send(
+            {
+              id: request.id,
+              result: {
+                name: "REA Hopper bridge",
+                version: "1.0.0",
+                run_id: runId,
+              },
             },
-          },
-          true,
-        );
+            true,
+          );
+        if (healthMode === "gated") heldReplies.set(request.id, reply);
+        else if (healthMode === "ready") reply();
+        else throw new Error(`Unknown health fixture mode: ${healthMode}`);
       } else if (
         request.method === "shutdown" ||
         request.method === "shutdown_document"
@@ -249,5 +273,6 @@ const closeServer = () =>
     if (process.connected) process.disconnect();
   });
 
-server.listen(socketPath);
+if (diagnosticMode === "noisy_no_socket") emitDiagnosticOutput();
+else server.listen(socketPath);
 process.on("SIGTERM", closeServer);

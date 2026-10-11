@@ -6,7 +6,7 @@ import {
   type AnalysisProfileCommitment,
 } from "../../domain/analysisProfile.js";
 import { AnalysisCancelledError } from "../../domain/analysisErrorCore.js";
-import { type AnalysisError } from "../../domain/analysisErrorBase.js";
+import type { AnalysisError } from "../../domain/analysisErrorBase.js";
 import { err, ok, type Result } from "../../domain/result.js";
 import type { JsonValue } from "../../domain/jsonValue.js";
 import { createEvidence } from "../../domain/evidence.js";
@@ -497,7 +497,7 @@ export class BinarySession
   execute(
     name: Parameters<AnalysisOperationPort["execute"]>[0],
     arguments_: Readonly<Record<string, JsonValue>>,
-    options?: { readonly signal?: AbortSignal },
+    options?: Pick<ExecutionOptions, "signal" | "selectorOrigin">,
   ): Promise<Result<AnalysisExecution, AnalysisError>> {
     const generation = this.#transitionGeneration;
     const call = this.#execute(name, arguments_, options, this.#transition);
@@ -535,7 +535,7 @@ export class BinarySession
   async #execute(
     name: Parameters<AnalysisOperationPort["execute"]>[0],
     arguments_: Readonly<Record<string, JsonValue>>,
-    options: { readonly signal?: AbortSignal } | undefined,
+    options: Pick<ExecutionOptions, "signal" | "selectorOrigin"> | undefined,
     transition: Promise<void>,
   ): Promise<Result<AnalysisExecution, AnalysisError>> {
     const transitioned = await this.#waitForTransition(

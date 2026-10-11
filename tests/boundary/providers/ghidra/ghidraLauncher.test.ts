@@ -1,5 +1,5 @@
 import { access, chmod, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -113,6 +113,39 @@ describe("Ghidra COM loader", () => {
   });
 });
 
+describe("Ghidra raw-binary loader", () => {
+  it("loads caller-supplied architecture and entry before auto-analysis", () => {
+    const arguments_ = ghidraHeadlessArguments({
+      projectRoot: "/tmp/project",
+      targetPath: "/tmp/ecu.bin",
+      bridgeScriptPath: "/package/bridge/ReaGhidraBridge.java",
+      descriptorPath: "/tmp/session.json",
+      ghidraLogPath: "/tmp/ghidra.log",
+      scriptLogPath: "/tmp/script.log",
+      rawBinary: {
+        languageId: "ARM:LE:32:v7",
+        compilerSpecId: "default",
+        baseAddr: "0x8000000",
+      },
+    });
+    expectOptions(arguments_, [
+      ["-loader", "BinaryLoader"],
+      ["-loader-baseAddr", "0x8000000"],
+      ["-processor", "ARM:LE:32:v7"],
+      ["-cspec", "default"],
+    ]);
+    const prepare = arguments_.indexOf("-preScript");
+    expect(arguments_[prepare + 1]).toBe(
+      join("/package/bridge", "ReaGhidraPrepareRaw.java"),
+    );
+    expect(arguments_[prepare + 2]).toBe("ARM:LE:32:v7");
+    expect(arguments_[prepare + 3]).toBe("0x8000000");
+    expect(prepare).toBeLessThan(arguments_.indexOf("-postScript"));
+    expect(arguments_).toContain("-readOnly");
+    expect(arguments_).toContain("-deleteProject");
+  });
+});
+
 describe("Ghidra headless launcher", () => {
   it("forces the admitted real-mode language and loader for DOS MZ", () => {
     const arguments_ = ghidraHeadlessArguments({
@@ -157,6 +190,102 @@ describe("Ghidra headless launcher", () => {
     expect(arguments_[bridge + 1]).toBe("/tmp/session.json");
     expect(arguments_).toContain("-readOnly");
     expect(arguments_).toContain("-deleteProject");
+  });
+});
+
+describe("Ghidra configured import language and seeds", () => {
+  const base = {
+    platform: "darwin" as const,
+    projectRoot: "/tmp/project",
+    targetPath: "/tmp/target",
+    bridgeScriptPath: "/package/bridge/ReaGhidraBridge.java",
+    descriptorPath: "/tmp/session.json",
+    ghidraLogPath: "/tmp/ghidra.log",
+    scriptLogPath: "/tmp/script.log",
+  };
+
+  it("passes a configured language and compiler spec to the import", () => {
+    const arguments_ = ghidraHeadlessArguments({
+      ...base,
+      languageOverride: {
+        languageId: "x86:LE:32:default",
+        compilerSpecId: "borlandcpp",
+      },
+    });
+    expectOptions(arguments_, [
+      ["-processor", "x86:LE:32:default"],
+      ["-cspec", "borlandcpp"],
+    ]);
+    expect(arguments_).not.toContain("-loader");
+    expect(arguments_.indexOf("-processor")).toBeGreaterThan(
+      arguments_.indexOf("-import"),
+    );
+  });
+
+  it("lets Ghidra choose the language default compiler spec", () => {
+    const arguments_ = ghidraHeadlessArguments({
+      ...base,
+      languageOverride: { languageId: "x86:LE:32:default" },
+    });
+    expectOptions(arguments_, [["-processor", "x86:LE:32:default"]]);
+    expect(arguments_).not.toContain("-cspec");
+  });
+
+  it("never combines a configured language with a DOS import", () => {
+    expect(() =>
+      ghidraHeadlessArguments({
+        ...base,
+        dosMz: true,
+        languageOverride: { languageId: "x86:LE:32:default" },
+      }),
+    ).toThrow(/cannot be combined with a DOS import/u);
+  });
+
+  it("never combines a configured language with a raw-binary import", () => {
+    expect(() =>
+      ghidraHeadlessArguments({
+        ...base,
+        languageOverride: { languageId: "x86:LE:32:default" },
+        rawBinary: {
+          languageId: "ARM:LE:32:v7",
+          compilerSpecId: "default",
+          baseAddr: "0x8000000",
+        },
+      }),
+    ).toThrow(/cannot be combined with a raw-binary import/u);
+  });
+
+  it.each(["darwin", "win32"] as const)(
+    "applies seeds after loader preparation and before analysis scripts on %s",
+    (platform) => {
+      const path = platform === "win32" ? win32 : posix;
+      const bridgeDirectory = path.join("/package", "bridge");
+      const seedPath = path.join("/tmp/runtime/seeds", "seeds.tsv");
+      const arguments_ = ghidraHeadlessArguments({
+        ...base,
+        platform,
+        bridgeScriptPath: path.join(bridgeDirectory, "ReaGhidraBridge.java"),
+        dosCom: true,
+        seedPath,
+      });
+      const prepare = arguments_.indexOf(
+        path.join(bridgeDirectory, "ReaGhidraPrepareCom.java"),
+      );
+      const seeds = arguments_.indexOf(
+        path.join(bridgeDirectory, "ReaGhidraApplySeeds.java"),
+      );
+      expect(prepare).toBeGreaterThanOrEqual(0);
+      expect(arguments_[seeds - 1]).toBe("-preScript");
+      expect(arguments_[seeds + 1]).toBe(seedPath);
+      expect(prepare).toBeLessThan(seeds);
+      expect(seeds).toBeLessThan(arguments_.indexOf("-postScript"));
+    },
+  );
+
+  it("adds no seed script without a seed snapshot", () => {
+    expect(ghidraHeadlessArguments(base)).not.toContain(
+      posix.join("/package/bridge", "ReaGhidraApplySeeds.java"),
+    );
   });
 });
 

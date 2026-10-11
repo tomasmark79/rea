@@ -1,4 +1,5 @@
 import type { ArtifactInventorySnapshot } from "../../domain/artifactInventorySnapshot.js";
+import type { JsonValue } from "../../domain/jsonValue.js";
 import { compositeKey } from "../../domain/unicodeCodePointOrder.js";
 import {
   completeApplicationCoverage,
@@ -99,6 +100,8 @@ export interface UnavailableParseInput {
   readonly asset: ApplicationNode;
   readonly operation: string;
   readonly limitation: string;
+  readonly failure?: JsonValue;
+  readonly limits?: JavaScriptArtifactGraphCoverage["limits"];
 }
 
 /** Add a direct artifact-containment edge. */
@@ -182,12 +185,15 @@ export const addUnavailableStaticParseScope = (
           path: input.file.path,
           operation: input.operation,
           limitation: input.limitation,
+          ...(input.failure === undefined
+            ? {}
+            : { analysis_failure: input.failure }),
         },
         evidence: unavailableAstEvidence({
           sha256: input.file.sha256,
           path: input.file.path,
           operation: input.operation,
-          coverage: partialApplicationCoverage([], null),
+          coverage: partialApplicationCoverage(input.limits ?? [], null),
           limitation: input.limitation,
         }),
       },
@@ -323,8 +329,11 @@ export const selfReferenceOmissions = (
       ];
 
 /** Deterministic key for one recovered module inside a bundle asset. */
-export const moduleLookupKey = (path: string, moduleKey: string): string =>
-  `${path}\0${moduleKey}`;
+export const moduleLookupKey = (
+  path: string,
+  runtime: string,
+  moduleKey: string,
+): string => compositeKey([path, runtime, moduleKey]);
 
 /** Deterministic key for one recovered bundler chunk inside a bundle asset. */
 export const chunkLookupKey = (
@@ -353,7 +362,10 @@ export const sourceNodeFor = (
   context: JavaScriptArtifactGraphContext,
   path: string,
   moduleKey: string | null,
+  runtime?: string,
 ): ApplicationNode | undefined =>
   moduleKey === null
     ? context.sourceModuleNodes.get(path)
-    : context.moduleNodes.get(moduleLookupKey(path, moduleKey));
+    : runtime === undefined
+      ? undefined
+      : context.moduleNodes.get(moduleLookupKey(path, runtime, moduleKey));

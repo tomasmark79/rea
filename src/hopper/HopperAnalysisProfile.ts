@@ -14,7 +14,7 @@ import {
 } from "../domain/analysisErrorCore.js";
 import { BinaryTargetError } from "../domain/configurationErrors.js";
 import { ProviderAdapterError } from "../domain/providerAdapterError.js";
-import { type AnalysisError } from "../domain/analysisErrorBase.js";
+import type { AnalysisError } from "../domain/analysisErrorBase.js";
 import { err, ok, type Result } from "../domain/result.js";
 
 import {
@@ -140,6 +140,7 @@ export const hopperLoaderArgsForTarget = (
       return ok(["-l", "WinPE", flag]);
     case "dos-mz":
     case "dos-com":
+    case "raw-binary":
       return err(
         new ProviderAdapterError("hopper", "resolve_analysis_profile"),
       );

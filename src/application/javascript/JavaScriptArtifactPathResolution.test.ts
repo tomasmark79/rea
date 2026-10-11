@@ -1015,6 +1015,7 @@ describe("contextual JavaScript module identity", () => {
   it("retains CommonJS and ESM file-base identity during inert extraction", () => {
     const analysis = analyzeJavaScriptStaticSource(
       `
+        import { BrowserWindow } from "electron";
         new BrowserWindow({ webPreferences: {
           preload: path.resolve("ignored", __dirname, "preload.cjs")
         }});
@@ -1105,6 +1106,33 @@ describe("contextual JavaScript module identity", () => {
 });
 
 describe("url-reference JavaScript artifact path resolution", () => {
+  it.each([
+    "app%00.js.map",
+    "app%FF.js.map",
+    "app%C0%AF.js.map",
+    "app%2ejs.map",
+    "nested%2fworker.js",
+    "nested%5cworker.js",
+    "../../outside.js.map",
+  ])("rejects an inadmissible URL path: %s", (declaredPath) => {
+    const resolution = resolve({
+      declaredPath,
+      sourcePath: "dist/app.js",
+      context: "url-reference",
+      files: fileMap([
+        file("dist/app.js.map", "root"),
+        file("dist/nested/worker.js", "root"),
+      ]),
+    });
+    expect(resolution).toMatchObject({
+      declared_path: declaredPath,
+      resolution_context: "url-reference",
+      resolution_status: "rejected",
+      resolved_path: null,
+    });
+    expect(resolution.limitations.length).toBeGreaterThan(0);
+  });
+
   it("resolves sibling paths and rejects external URL forms", () => {
     const files = fileMap([
       file("dist/app.js", "root"),
